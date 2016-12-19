@@ -4,7 +4,7 @@
             "enabled": 1,
             "pairing_mode": 1,
             "private_addressing": 0,
-            "open": 0,
+            "open": 1,
             "whitelist": 1,
             "advertising_timeout": 0,
             "tx_power": 0,
@@ -12,6 +12,7 @@
             "event_service": 0,
             "device_info_service": 1
         },
-        "gatt_table_size": "0x600"
+        "debug": 1,
+        "gatt_table_size": "0x700"
     }
 }
