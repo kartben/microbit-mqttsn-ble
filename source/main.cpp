@@ -36,15 +36,16 @@ MicroBitSerial serial(USBTX, USBRX);
 int connected = 0;
 
 int rc = 0;
-unsigned char buf[200];
+unsigned char buf[100];
 int buflen = sizeof(buf);
 MQTTSN_topicid topic;
+MQTTSNString topicstr;
 int len = 0;
 int dup = 0;
 int qos = 0;
 int retained = 0;
 short packetid = 0;
-//  char *topicname = "a long topic name";
+unsigned short topicid;
 MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
 
 #define BLE_CHUNK_SIZE 18
@@ -79,6 +80,7 @@ int transport_sendPacketBuffer(unsigned char* buf, int buflen)
 int transport_getdata(unsigned char* buf, int count)
 {
     int rc = uart->read(buf, count, ASYNC);
+
     return rc;
 }
 
@@ -108,7 +110,8 @@ void onConnected(MicroBitEvent)
     rc = transport_sendPacketBuffer(buf, len);
 
     /* wait for connack */
-    if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_CONNACK)
+    rc = MQTTSNPacket_read(buf, buflen, transport_getdata);
+    if (rc == MQTTSN_CONNACK)
     {
         int connack_rc = -1;
 
@@ -116,11 +119,43 @@ void onConnected(MicroBitEvent)
         {
             // TODO goto exit;
         }
-        else 
-            printf("connected rc %d\n", connack_rc);
+        else {
+            // OK
+        }
     } else {
         // TODO exit
     }
+
+    /* register topic name */
+    int packetid = 1;
+    char topicname[20];
+    strcpy(topicname, "microbit/");
+    strcat(topicname, microbit_friendly_name());
+    topicstr.cstring = topicname; 
+    topicstr.lenstring.len = strlen(topicname);
+    len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr);
+    rc = transport_sendPacketBuffer(buf, len);
+
+    rc = MQTTSNPacket_read(buf, buflen, transport_getdata);
+    if (rc == MQTTSN_REGACK)     /* wait for regack */
+    {
+        unsigned short submsgid;
+        unsigned char returncode;
+
+        rc = MQTTSNDeserialize_regack(&topicid, &submsgid, &returncode, buf, buflen);
+        if (returncode != 0)
+        {
+            // TODO exit;
+        }
+        else {
+            // OK
+        }
+    }
+    else {
+        // TODO exit;
+    }
+
+
 }
 
 void onDisconnected(MicroBitEvent)
@@ -134,8 +169,8 @@ void onDisconnected(MicroBitEvent)
 // stay concise!
 void publish(char * payload) {
     /* publish with short name */
-    topic.type = MQTTSN_TOPIC_TYPE_SHORT;
-    memcpy(topic.data.short_name, "mb", 2);
+    topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
+    topic.data.id = topicid;
 
     len = MQTTSNSerialize_publish(buf, buflen, dup, qos, retained, packetid,
             topic, (unsigned char *) payload, strlen(payload));
@@ -156,7 +191,7 @@ void onButtonB(MicroBitEvent)
     if (connected == 0) {
         return;
     }
-    publish("BBB");
+    publish("B");
 }
 
 void onButtonAB(MicroBitEvent)
@@ -164,16 +199,7 @@ void onButtonAB(MicroBitEvent)
     if (connected == 0) {
         return;
     }
-
-    char mypayload[250];
-    sprintf((char*)mypayload, 
-        "{\"x\":%d,\"y\":%d,\"z\":%d}",
-        uBit.accelerometer.getX(), 
-        uBit.accelerometer.getY(), 
-        uBit.accelerometer.getZ()
-    ); 
-
-    publish(mypayload);
+    publish("AB");
 }
 
 int main()
@@ -188,6 +214,22 @@ int main()
     uBit.messageBus.listen(MICROBIT_ID_BUTTON_AB, MICROBIT_BUTTON_EVT_CLICK, onButtonAB);
 
     transport_open();
+
+    while(1) {
+        char mypayload[250];
+        sprintf((char*)mypayload, 
+            "{\"x\":%d,\"y\":%d,\"z\":%d}",
+            uBit.accelerometer.getX(), 
+            uBit.accelerometer.getY(), 
+            uBit.accelerometer.getZ()
+        ); 
+
+        publish(mypayload);
+
+
+        fiber_sleep(200);
+    }
+
 
     // If main exits, there may still be other fibers running or registered event handlers etc.
     // Simply release this fiber, which will mean we enter the scheduler. Worse case, we then
