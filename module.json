@@ -1,0 +1,19 @@
+{
+  "name": "microbit-mqttsn-ble",
+  "version": "0.0.1",
+  "description": "Running an MQTT-SN client on micro:bit over BLE UART",
+  "keywords": [
+    "mqtt-sn",
+    "iot",
+    "mqtt",
+    "ble",
+    "uart"
+  ],
+  "author": "Benjamin Cab\u00e9",
+  "homepage": "https://blog.benjamin-cabe.com",
+  "license": "EPL",
+  "dependencies": {
+    "microbit": "lancaster-university/microbit"
+  },
+  "bin": "./source"
+}
