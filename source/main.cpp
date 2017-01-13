@@ -24,16 +24,16 @@ DEALINGS IN THE SOFTWARE.
 */
 
 #include "MicroBit.h"
-#include "MicroBitSerial.h"
 #include "MicroBitUARTService.h"
 
 #include "MQTTSNPacket.h"
 
 MicroBit uBit;
 MicroBitUARTService *uart;
-MicroBitSerial serial(USBTX, USBRX); 
 
-int connected = 0;
+volatile int bleConnected = 0;
+volatile int mqttConnecting = 0;
+volatile int mqttConnected = 0;
 
 int rc = 0;
 unsigned char buf[100];
@@ -50,10 +50,8 @@ MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
 
 #define BLE_CHUNK_SIZE 18
 
-#ifndef min
-#define min(a,b)            (((a) < (b)) ? (a) : (b))
-#endif
-
+// for some reason uart->send does not seem to automatically write to the UART in chunks?
+// doing it manually instead...
 int send_in_chunks(unsigned char *buffer, size_t length, size_t chunk_size)
 {
     ssize_t n;
@@ -98,18 +96,19 @@ int transport_close()
     return 0;
 }
 
-
-void onConnected(MicroBitEvent)
+int mqtt_connect() 
 {
-    uBit.display.scroll("C");
+    if (mqttConnecting) {
+        return -1;
+    }
 
-    connected = 1;
-
+    mqttConnecting = 1;
     options.clientID.cstring = microbit_friendly_name();
     len = MQTTSNSerialize_connect(buf, buflen, &options);
     rc = transport_sendPacketBuffer(buf, len);
 
     /* wait for connack */
+    fiber_sleep(2000);
     rc = MQTTSNPacket_read(buf, buflen, transport_getdata);
     if (rc == MQTTSN_CONNACK)
     {
@@ -117,14 +116,18 @@ void onConnected(MicroBitEvent)
 
         if (MQTTSNDeserialize_connack(&connack_rc, buf, buflen) != 1 || connack_rc != 0)
         {
-            // TODO goto exit;
+            mqttConnecting = 0;
+            return -1;
         }
         else {
-            // OK
+            // OK - continue
         }
     } else {
-        // TODO exit
+            mqttConnecting = 0;
+            return -1;
     }
+
+    // uBit.wait_ms(500);
 
     /* register topic name */
     int packetid = 1;
@@ -136,6 +139,7 @@ void onConnected(MicroBitEvent)
     len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr);
     rc = transport_sendPacketBuffer(buf, len);
 
+    fiber_sleep(2000);
     rc = MQTTSNPacket_read(buf, buflen, transport_getdata);
     if (rc == MQTTSN_REGACK)     /* wait for regack */
     {
@@ -145,60 +149,73 @@ void onConnected(MicroBitEvent)
         rc = MQTTSNDeserialize_regack(&topicid, &submsgid, &returncode, buf, buflen);
         if (returncode != 0)
         {
-            // TODO exit;
+            mqttConnecting = 0;
+            return -1;
         }
         else {
-            // OK
+            mqttConnecting = 0;
+            mqttConnected = 1;
+            uBit.display.scroll("M");
+            return rc;
         }
     }
     else {
-        // TODO exit;
+        mqttConnecting = 0;
+        return -1;
     }
 
+    mqttConnecting = 0;
+    return -1;
+}
 
+void onConnected(MicroBitEvent)
+{
+    uBit.display.scroll("C");
+    bleConnected = 1;
+    mqtt_connect();
 }
 
 void onDisconnected(MicroBitEvent)
 {
     uBit.display.scroll("D");
-    connected = 0;
+    bleConnected = 0;
+    mqttConnected = 0;
 }
 
 // publishes an MQTT-SN message. 
 // keep in mind that BLE payloads over >19bytes might not work that well so try to 
 // stay concise!
 void publish(char * payload) {
-    /* publish with short name */
-    topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
-    topic.data.id = topicid;
+    if (mqttConnected == 0) {
+        // try to reconnect:
+        int rc = mqtt_connect();
+        if (rc != 0) 
+            return;
+    } else {
+        /* publish with short name */
+        topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
+        topic.data.id = topicid;
 
-    len = MQTTSNSerialize_publish(buf, buflen, dup, qos, retained, packetid,
-            topic, (unsigned char *) payload, strlen(payload));
-    rc = transport_sendPacketBuffer(buf, len);
+        len = MQTTSNSerialize_publish(buf, buflen, dup, qos, retained, packetid,
+                topic, (unsigned char *) payload, strlen(payload));
+        rc = transport_sendPacketBuffer(buf, len);
+        uBit.display.scrollAsync(ManagedString("."),10); 
+    }
 }
 
 
 void onButtonA(MicroBitEvent)
 {
-    if (connected == 0) {
-        return;
-    }
     publish("A");
 }
 
 void onButtonB(MicroBitEvent)
 {
-    if (connected == 0) {
-        return;
-    }
     publish("B");
 }
 
 void onButtonAB(MicroBitEvent)
 {
-    if (connected == 0) {
-        return;
-    }
     publish("AB");
 }
 
@@ -215,8 +232,10 @@ int main()
 
     transport_open();
 
+    fiber_sleep(2000);
+
     while(1) {
-        char mypayload[250];
+        char mypayload[50];
         sprintf((char*)mypayload, 
             "{\"x\":%d,\"y\":%d,\"z\":%d}",
             uBit.accelerometer.getX(), 
@@ -226,8 +245,7 @@ int main()
 
         publish(mypayload);
 
-
-        fiber_sleep(200);
+        fiber_sleep(500);
     }
 
 
